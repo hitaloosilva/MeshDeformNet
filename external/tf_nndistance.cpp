@@ -1,12 +1,35 @@
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/shape_inference.h"
+using namespace tensorflow;
+
 REGISTER_OP("NnDistance")
 	.Input("xyz1: float32")
 	.Input("xyz2: float32")
 	.Output("dist1: float32")
 	.Output("idx1: int32")
 	.Output("dist2: float32")
-	.Output("idx2: int32");
+	.Output("idx2: int32")
+	.SetShapeFn([](shape_inference::InferenceContext* c) {
+        shape_inference::ShapeHandle xyz1_shape = c->input(0);
+        shape_inference::ShapeHandle xyz2_shape = c->input(1);
+        // batch_size is the first dimension 
+        shape_inference::DimensionHandle batch_size = c->Dim(xyz1_shape, 0);
+        // dataset_points points is the 2nd dimension of the first input
+        shape_inference::DimensionHandle points_1 = c->Dim(xyz1_shape, 1);
+        // query_points points is the 2nd dimension of the second input
+        shape_inference::DimensionHandle points_2 = c->Dim(xyz2_shape, 1);
+
+		shape_inference::ShapeHandle output1 = c->MakeShape({batch_size, points_1});
+		shape_inference::ShapeHandle output2 = c->MakeShape({batch_size, points_2});
+        c->set_output(0, output1); 
+		c->set_output(1, output1); 
+		c->set_output(2, output2); 
+		c->set_output(3, output2); 
+        // Returning a status telling that everything went well
+        return OkStatus(); 
+    });
+
 REGISTER_OP("NnDistanceGrad")
 	.Input("xyz1: float32")
 	.Input("xyz2: float32")

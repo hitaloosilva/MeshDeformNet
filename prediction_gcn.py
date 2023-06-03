@@ -16,10 +16,10 @@ import numpy as np
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 import tensorflow as tf
-from tensorflow.python.keras import models as models_keras
+from tensorflow.keras import models as models_keras
 import SimpleITK as sitk 
 from pre_process import *
-from tensorflow.python.keras import backend as K
+from tensorflow.keras import backend as K
 from model import DeformNet
 from data_loader import *
 import vtk
@@ -59,6 +59,23 @@ def write_scores(csv_path,scores):
             print(scores[i])
     writeFile.close()
 
+def centerCrop(samples, new_shape):
+    shape = np.array(samples.GetSize())
+    print("shape", shape)
+    print("new_shape", new_shape)
+    delta = [(shape[i] - new_shape[i]) // 2 for i in range(len(new_shape))]
+    samples = samples[
+        delta[0]:delta[0] + new_shape[0],
+        delta[1]:delta[1] + new_shape[1],
+        delta[2]:delta[2] + new_shape[2]]
+    print("new_shape", np.array(samples.GetSize()))
+    return samples
+
+
+def process_image(image, mask, size, m, intensity, seg_id, deci_rate, smooth_iter):
+   
+    mask  = centerCrop(mask, (496, 496, 187))
+
 class Prediction:
     #This class use the GCN model to predict mesh from 3D images
     def __init__(self, info, model_name, mesh_tmplt):
@@ -71,18 +88,20 @@ class Prediction:
             layer.trainable = False
         self.model.load_weights(self.model_name)
         self.mesh_tmplt = mesh_tmplt
-        try:
-            os.makedirs(os.path.dirname(self.out_fn))
-        except Exception as e: print(e)
+        
          
     def set_image_info(self, modality, image_fn, size, out_fn, mesh_fn=None, d_weights=None, write=False):
         self.modality = modality
-        self.image_fn = image_fn
-        self.image_vol = load_image_to_nifty(image_fn)
+        self.image_fn = image_fn        
+        self.image_vol = centerCrop(load_image_to_nifty(image_fn), (496, 496, 187))
         self.origin = np.array(self.image_vol.GetOrigin())
         self.img_center = np.array(self.image_vol.TransformContinuousIndexToPhysicalPoint(np.array(self.image_vol.GetSize())/2.0))
         self.size = size
         self.out_fn = out_fn
+        try:
+            os.makedirs(os.path.dirname(self.out_fn))
+        except Exception as e: 
+            print(e)
         # down sample to investigate low resolution
         if d_weights:
             self.image_vol = resample_spacing(self.image_vol, template_size = (384, 384, 384), order=1)[0]
@@ -186,8 +205,11 @@ class Prediction:
         for index, i in enumerate(ids):
             if i==0:
                 continue
-            p_s = vtk_marching_cube(pred_im, 0, i)
-            r_s = vtk_marching_cube(ref_im, 0, i)
+            
+            #p_s = vtk_marching_cube(pred_im, 0, i)
+            #r_s = vtk_marching_cube(ref_im, 0, i)
+            p_s = vtk_flying_edge(pred_im, 0, i)
+            r_s = vtk_flying_edge(ref_im, 0, i)
             dist_ref2pred, d_ref2pred = _get_assd(p_s, r_s)
             dist_pred2ref, d_pred2ref = _get_assd(r_s, p_s)
             dist[index] = (dist_ref2pred+dist_pred2ref)*0.5
@@ -216,10 +238,12 @@ class Prediction:
         dir_name = os.path.dirname(self.out_fn)
         base_name = os.path.basename(self.out_fn)
         for i, pred in enumerate(self.prediction):
-            fn_i =os.path.join(dir_name, 'block'+str(i)+'_'+base_name+'.vtp')
+            fn_i = os.path.join(dir_name, 'block'+str(i)+'_'+base_name+'.vtp')
+            fn_i_vtk = os.path.join(dir_name, 'block'+str(i)+'_'+base_name+'.vtk')
             print("Writing into: ", fn_i)
             pred_all = appendPolyData(pred)
             write_vtk_polydata(pred_all, fn_i)
+            write_vtk_polydata(pred_all, fn_i_vtk)
         _, ext = self.image_fn.split(os.extsep, 1)
         if ext == 'vti':
             ref_im = load_vtk_image(self.image_fn)

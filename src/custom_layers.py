@@ -12,11 +12,10 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 import tensorflow as tf
-import tensorflow.contrib as tfcontrib
-from tensorflow.python.keras import layers
-from tensorflow.python.keras import models
-from tensorflow.python.keras import backend as K
-from tensorflow.python.keras import regularizers
+from tensorflow.keras import layers
+from tensorflow.keras import models
+from tensorflow.keras import backend as K
+from tensorflow.keras import regularizers
 import tf_utils
 import numpy as np
 def dot(x, y, sparse=False):
@@ -27,6 +26,16 @@ def dot(x, y, sparse=False):
     else:
         res = tf.tensordot(x, y, axes=1)
     return res
+
+
+class MeshLayer(tf.keras.layers.Layer):
+    def __init__(self, mesh_idx, num_coords, **kwargs):
+      super(MeshLayer, self).__init__(**kwargs)
+      self.mesh_idx = mesh_idx
+      self.num_coords = num_coords
+
+    def call(self, inputs):
+      return inputs[:, self.mesh_idx * self.num_coords:(self.mesh_idx+1) * self.num_coords, :]
 
 class Position(layers.Layer):
     def __init__(self, mesh_coords, scale=0., center=[0.,0.,0.], if_image=True,**kwargs):
@@ -100,6 +109,7 @@ class ScalarMul(layers.Layer):
     def call(self, x):
         x *= self.factor
         return x
+    
 def gather_nd(features, indices):
     # tf1.12 does not support gather_nd with batch_dims; work around: 
     ind_shape = tf.shape(indices)
@@ -128,9 +138,13 @@ class Projection(layers.Layer):
     
     def call(self, inputs):
         features0,features1,features2,features3,features4, mesh_coords, mesh_features= inputs
-        mesh_shape = mesh_coords.get_shape().as_list()
-        mesh_coords = tf.reshape(mesh_coords, [mesh_shape[0], mesh_shape[1]*(mesh_shape[2]//3), 3])
-        out = tf.zeros([mesh_shape[0], mesh_shape[1]*(mesh_shape[2]//3), 0], tf.float32)
+        mesh_shape = mesh_coords.get_shape().as_list()        
+        new_meshcoord_shape = tf.stack([tf.shape(mesh_coords)[0], mesh_shape[1]*(mesh_shape[2]//3), 3])
+        mesh_coords = tf.reshape(mesh_coords, new_meshcoord_shape)
+        #out = tf.zeros([mesh_shape[0], mesh_shape[1]*(mesh_shape[2]//3), 0], tf.float32)
+        zeros_dims = tf.stack([tf.shape(mesh_coords)[0], mesh_shape[1]*(mesh_shape[2]//3), 0])
+        out= tf.fill(zeros_dims, 0.0)
+
         features = [features0, features1, features2, features3, features4]
         num = len(features)
         id_list = self.feature_block_ids
@@ -141,11 +155,11 @@ class Projection(layers.Layer):
             indices = mesh_coords * factor
             indices = tf.clip_by_value(indices, 0.01,tf.cast(tf.reduce_min(tf.shape(features[i])[1:4]), tf.float32)-1.01)
             x1 = tf.floor(indices[:,:,0])
-            x2 = tf.ceil(indices[:,:,0])
+            x2 = tf.math.ceil(indices[:,:,0])
             y1 = tf.floor(indices[:,:,1])
-            y2 = tf.ceil(indices[:,:,1])
+            y2 = tf.math.ceil(indices[:,:,1])
             z1 = tf.floor(indices[:,:,2])
-            z2 = tf.ceil(indices[:,:,2])
+            z2 = tf.math.ceil(indices[:,:,2])
             q11 = gather_nd(features[i], tf.cast(tf.stack([x1, y1, z1], axis=-1), tf.int32))
             q21 = gather_nd(features[i], tf.cast(tf.stack([x2, y1, z1], axis=-1), tf.int32))
             q12 = gather_nd(features[i], tf.cast(tf.stack([x1, y2, z1], axis=-1), tf.int32))
@@ -170,7 +184,7 @@ class Projection(layers.Layer):
             wz2 = tf.expand_dims(tf.subtract(z2, indices[:,:,2]),-1)
             lerp_z = tf.add(tf.multiply(lerp_y2, wz), tf.multiply(lerp_y1, wz2))
             out = tf.concat([out, lerp_z], axis=-1)
-        out = tf.reshape(out, [mesh_shape[0], mesh_shape[1], out.get_shape().as_list()[-1]*(mesh_shape[2]//3)])
+        out = tf.reshape(out, [tf.shape(mesh_coords)[0], mesh_shape[1], out.get_shape().as_list()[-1]*(mesh_shape[2]//3)])
         out = tf.concat([out, mesh_features], axis=-1)
         return out
     def compute_output_shape(self, input_shape):
@@ -194,6 +208,7 @@ class GraphConv(layers.Layer):
         self.featureless = featureless
         self.vars = {}
         self.adjs = adjs
+
     def get_config(self):
         config = {'input_dim': self.input_dim, 
                 'output_dim': self.output_dim, 
@@ -205,6 +220,7 @@ class GraphConv(layers.Layer):
                 'featureless': self.featureless}
         base_config = super(GraphConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+
     def build(self, input_shape):
         # Create a trainable weight variable for this layer.
         self.batch_size = input_shape[0]
@@ -216,7 +232,8 @@ class GraphConv(layers.Layer):
                                       initializer='glorot_normal',
                                       regularizer=regularizers.l2(0.01), 
                                       trainable=True)
-        self.vars['bias'] = self.add_weight(name='bias', 
+        if self.bias:
+            self.vars['bias'] = self.add_weight(name='bias', 
                                       shape=( self.output_dim),
                                       initializer='zeros',
                                       #regularizer=regularizers.l2(0.01), 
@@ -231,7 +248,7 @@ class GraphConv(layers.Layer):
             support = dot(x, self.vars[name], sparse=self.sparse_inputs)
             output = output + dot(self.adjs[i-1], support, sparse=True)
         if self.bias:
-            output += self.vars['bias']
+            output = output + self.vars['bias']
 
         return self.act(output)
 
@@ -240,8 +257,8 @@ class GraphConv(layers.Layer):
         output_shape[-1] = self.output_dim
         return output_shape
 
-from tensorflow.python.keras.layers import Layer, InputSpec
-from tensorflow.python.keras import initializers, regularizers, constraints
+from tensorflow.keras.layers import Layer, InputSpec
+from tensorflow.keras import initializers, regularizers, constraints
 
 class InstanceNormalization(layers.Layer):
     """Instance normalization layer. Taken from keras.contrib

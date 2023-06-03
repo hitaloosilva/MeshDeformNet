@@ -13,11 +13,13 @@
 #limitations under the License.
 import os
 import tensorflow as tf
-from tensorflow.python.keras import losses
-from tensorflow.python.keras import backend as K
+from tensorflow_graphics.nn.loss import chamfer_distance
+from tensorflow.keras import losses
+from tensorflow.keras import backend as K
 import numpy as np
 
 from tensorflow.python.framework import ops
+print(os.path.join(os.path.dirname(__file__), '../external/tf_nndistance_so.so'))
 nn_distance_module=tf.load_op_library(os.path.join(os.path.dirname(__file__), '../external/tf_nndistance_so.so'))
 
 def nn_distance(xyz1,xyz2):
@@ -31,12 +33,14 @@ def nn_distance(xyz1,xyz2):
     output: idx2:  (batch_size,#point_2)   nearest neighbor from second to first
     '''
     return nn_distance_module.nn_distance(xyz1,xyz2)
-@ops.RegisterShape('NnDistance')
-def _nn_distance_shape(op):
-    shape1=op.inputs[0].get_shape().with_rank(3)
-    shape2=op.inputs[1].get_shape().with_rank(3)
-    return [tf.TensorShape([shape1.dims[0],shape1.dims[1]]),tf.TensorShape([shape1.dims[0],shape1.dims[1]]),
-        tf.TensorShape([shape2.dims[0],shape2.dims[1]]),tf.TensorShape([shape2.dims[0],shape2.dims[1]])]
+
+#@ops.RegisterShape('NnDistance')
+#def _nn_distance_shape(op):
+#    shape1=op.inputs[0].get_shape().with_rank(3)
+#    shape2=op.inputs[1].get_shape().with_rank(3)
+#    return [tf.TensorShape([shape1.dims[0],shape1.dims[1]]),tf.TensorShape([shape1.dims[0],shape1.dims[1]]),
+#        tf.TensorShape([shape2.dims[0],shape2.dims[1]]),tf.TensorShape([shape2.dims[0],shape2.dims[1]])]
+
 @ops.RegisterGradient('NnDistance')
 def _nn_distance_grad(op,grad_dist1,grad_idx1,grad_dist2,grad_idx2):
     xyz1=op.inputs[0]
@@ -48,23 +52,25 @@ def _nn_distance_grad(op,grad_dist1,grad_idx1,grad_dist2,grad_idx2):
 def laplace_coord(pred, feed_dict, block_id):
     batch_size = tf.shape(pred)[0]
     # Add one zero vertex since the laplace index was initialized to be -1 
+    min = 0
+    max = tf.shape(pred)[1]
     vertex = tf.concat([pred, tf.zeros([batch_size, 1, 3])], 1)
     indices = feed_dict['lape_idx'][block_id-1][:,:-2]
     weights = tf.cast(feed_dict['lape_idx'][block_id-1][:,-1], tf.float32)
-    weights = tf.tile(tf.reshape(tf.reciprocal(weights), [-1,1]), [1,3])
-    laplace = tf.reduce_sum(tf.gather(vertex, indices, axis=1), 2)
+    weights = tf.tile(tf.reshape(tf.math.reciprocal(weights), [-1,1]), [1,3])
+    laplace = tf.reduce_sum(tf.gather(vertex, tf.clip_by_value(indices, min, max) , axis=1, name="nome_nome"), 2)
     laplace = tf.subtract(pred, tf.multiply(laplace, weights))
     return laplace
 
 def unit(tensor):
-    return tf.nn.l2_normalize(tensor, dim=-1)
+    return tf.nn.l2_normalize(tensor, axis=-1)
 
 def mesh_loss_geometric_cf(feed_dict, block_id, weights, cf_ratio, edge_length):
     def loss(y_true, y_pred):
         losses = mesh_loss(y_pred, y_true, feed_dict, block_id, cf_ratio, edge_length)
         point_loss, edge_loss, normal_loss, laplace_loss = losses
         total_loss = tf.pow(point_loss*100, weights[0])*tf.pow(laplace_loss*100, weights[1]) \
-                *tf.pow(normal_loss*100, weights[2])*tf.pow(edge_loss*100, weights[3])
+                     *tf.pow(normal_loss*100, weights[2])*tf.pow(edge_loss*100, weights[3])
         return total_loss
     return loss
 
@@ -89,11 +95,11 @@ def edge_loss(feed_dict, block_id):
     def k_edge_loss(y_true, y_pred):
         num = y_pred.get_shape().as_list()[1] 
         gt_pt = y_true[:,:num,:3]
-        nod1 = tf.gather(y_pred, feed_dict['edges'][block_id-1][:,0], axis=1)
-        nod2 = tf.gather(y_pred, feed_dict['edges'][block_id-1][:,1], axis=1)
+        nod1 = tf.gather(y_pred, feed_dict['edges'][block_id-1][:,0], axis=1, name="edge_loss_g_1")
+        nod2 = tf.gather(y_pred, feed_dict['edges'][block_id-1][:,1], axis=1, name="edge_loss_g_2")
         edge = tf.subtract(nod2, nod1)
-        nod1_2 = tf.gather(gt_pt, feed_dict['edges'][block_id-1][:,0], axis=1)
-        nod2_2 = tf.gather(gt_pt, feed_dict['edges'][block_id-1][:,1], axis=1)
+        nod1_2 = tf.gather(gt_pt, feed_dict['edges'][block_id-1][:,0], axis=1, name="edge_loss_g_3")
+        nod2_2 = tf.gather(gt_pt, feed_dict['edges'][block_id-1][:,1], axis=1, name="edge_loss_g_4")
         edge_2 = tf.subtract(nod2_2, nod1_2)
         return tf.reduce_mean(tf.reduce_sum(tf.square(edge_2-edge), axis=-1))
     return k_edge_loss
@@ -117,29 +123,28 @@ def normal_loss(feed_dict, block_id):
         return normal_loss
     return k_normal_loss
 
-
-def mesh_loss(pred, gt, feed_dict, block_id, cf_ratio=1., edge_thresh=[0.,0.,0.]):
-    gt_pt = gt[:, :, :3] # gt points
+def normal_coss_loss(pred, feed_dict, block_id, idx2, gt):
     gt_nm = gt[:, :, 3:] # gt normals
+    v1 = tf.gather(pred, feed_dict['faces'][block_id-1][:,0], axis=1, name="normal_loss_g_1")
+    v2 = tf.gather(pred, feed_dict['faces'][block_id-1][:,1], axis=1, name="nor_loss_g_2")
+    v3 = tf.gather(pred, feed_dict['faces'][block_id-1][:,2], axis=1, name="nor_loss_g_3")
 
-    # chafmer distance
-    dist1,idx1,dist2,idx2 = nn_distance(gt_pt, pred)
-    point_loss = cf_ratio/(cf_ratio+1.)*2*tf.reduce_mean(dist1) + 1./(cf_ratio+1.)*2*tf.reduce_mean(dist2)
-    
-    # normal cosine loss
-    # edge in graph
-    nod1 = tf.gather(pred, feed_dict['edges'][block_id-1][:,0], axis=1)
-    nod2 = tf.gather(pred, feed_dict['edges'][block_id-1][:,1], axis=1)
-    edge = tf.subtract(nod2, nod1)
-    edge_length = tf.reduce_sum(tf.square(edge), axis=-1)
-    edge_loss = tf.reduce_mean(tf.abs(edge_length-edge_thresh[block_id-1]))
-    #edge_loss = tf.reduce_mean(tf.square(edge_length-edge_thresh[block_id-1]))
-    ## normal cosine loss
-    v1 = tf.gather(pred, feed_dict['faces'][block_id-1][:,0], axis=1)
-    v2 = tf.gather(pred, feed_dict['faces'][block_id-1][:,1], axis=1)
-    v3 = tf.gather(pred, feed_dict['faces'][block_id-1][:,2], axis=1)
-    idx_n = tf.gather(idx2, feed_dict['faces'][block_id-1][:,0], axis=1)
+    idx_n = tf.gather(idx2, feed_dict['faces'][block_id-1][:,0], axis=1, name="nor_loss_g_4")
     cross = tf.linalg.cross(v2-v1, v3-v1)
+
+    #gt_shape = tf.shape(gt_nm)
+    #gt_nm = tf.cond(tf.math.greater(gt_shape[1], tf.constant([0])), lambda: tf.constant(10), lambda: tf.constant(0))
+    #gt_shape_1 = tf.cond(tf.math.greater(gt_shape[1], tf.constant([0]), name="greater"), lambda: gt_shape[1], lambda: tf.constant([1]))
+    #gt_nm = tf.reshape(gt_nm, [gt_shape[0]*gt_shape_1, gt_shape_1[-1]])
+    #gt_shape2 = tf.shape(gt_nm)
+    #i_shape = tf.shape(idx_n)
+    #indices = tf.reshape(idx_n, [-1])
+    #first = tf.cast(tf.range(tf.size(indices))/i_shape[1], dtype=tf.int32) * gt_shape_1[1]
+    #indices = indices + first
+    #indices = tf.Print(indices, [gt_nm, gt_shape2, gt_shape, tf.shape(indices), indices], message="Normal Coss ")
+    #normal= tf.reshape(tf.gather(gt_nm, indices, axis=0, name="nor_loss_g_5"), [i_shape[0], i_shape[1], gt_shape[-1]])
+    # normal loss weighted by face area
+    #normal_loss = tf.reduce_mean(tf.reduce_sum(tf.square(unit(normal)-unit(cross)), axis=-1))
 
     gt_shape = tf.shape(gt_nm)
     gt_nm = tf.reshape(gt_nm, [gt_shape[0]*gt_shape[1], gt_shape[-1]])
@@ -150,7 +155,33 @@ def mesh_loss(pred, gt, feed_dict, block_id, cf_ratio=1., edge_thresh=[0.,0.,0.]
     normal= tf.reshape(tf.gather(gt_nm, indices, axis=0), [i_shape[0], i_shape[1], gt_shape[-1]])
     # normal loss weighted by face area
     normal_loss = tf.reduce_mean(tf.reduce_sum(tf.square(unit(normal)-unit(cross)), axis=-1))
+
+
+    return normal_loss
+
+
+def mesh_loss(pred, gt, feed_dict, block_id, cf_ratio=1., edge_thresh=[0.,0.,0.]):
+    gt_pt = gt[:, :, :3] # gt points
     
+    # chafmer distance
+    dist1,idx1,dist2,idx2 = nn_distance(gt_pt, pred)
+    point_loss = cf_ratio/(cf_ratio+1.)*2*tf.reduce_mean(dist1) + 1./(cf_ratio+1.)*2*tf.reduce_mean(dist2)
+    #point_loss_nn = chamfer_distance.evaluate(gt_pt, pred)  
+
+    #print("Losses chanfer", point_loss, point_loss_nn)
+
+    # normal cosine loss
+    # edge in graph
+    nod1 = tf.gather(pred, feed_dict['edges'][block_id-1][:,0], axis=1)
+    nod2 = tf.gather(pred, feed_dict['edges'][block_id-1][:,1], axis=1)
+    edge = tf.subtract(nod2, nod1)
+    edge_length = tf.reduce_sum(tf.square(edge), axis=-1)
+    edge_loss = tf.reduce_mean(tf.abs(edge_length-edge_thresh[block_id-1]))
+    #edge_loss = tf.reduce_mean(tf.square(edge_length-edge_thresh[block_id-1]))
+
+    ## normal cosine loss        
+    normal_loss = normal_coss_loss(pred, feed_dict, block_id, idx2, gt)
+
     lap = laplace_coord(pred, feed_dict, block_id)
     laplace_loss = tf.reduce_mean(tf.reduce_sum(tf.square(lap), -1))
     
@@ -180,9 +211,10 @@ def dice_coeff_mean(y_true, y_pred):
     shape = tf.shape(y_pred)
     batch = shape[0]
     length = tf.reduce_prod(shape[1:])
+    y_true = tf.cast(y_true, tf.float32)
     y_true_f = tf.reshape(y_true, [batch,length])
     y_pred_f = tf.reshape(y_pred, [batch,length])
-    intersection = tf.reduce_sum(tf.multiply(y_true_f ,y_pred_f), axis=-1)
+    intersection = tf.reduce_sum(tf.multiply(y_true_f , y_pred_f), axis=-1)
     score = (2. * intersection + smooth) / (tf.reduce_sum(y_true_f, axis=-1) + tf.reduce_sum(y_pred_f, axis=-1) + smooth)
     return tf.reduce_mean(score)
 
@@ -192,7 +224,7 @@ def bce_dice_loss(y_true, y_pred):
  
 def binary_bce_dice_loss(y_true, y_pred):
     condition = tf.greater(y_true, 0)
-    res = tf.where(condition, tf.ones_like(y_true), y_true)
+    res = tf.compat.v1.where(condition, tf.ones_like(y_true), y_true)
     pred = tf.sigmoid(y_pred)
     pred = tf.clip_by_value(pred, 1e-6, 1.-1e-6)
     loss = losses.binary_crossentropy(res, pred) + (1-dice_coeff_mean(res, pred))

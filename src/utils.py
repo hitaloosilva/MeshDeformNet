@@ -18,7 +18,7 @@ import re
 import vtk
 try:
     import tensorflow as tf
-    from tensorflow.python.keras import backend as K
+    from tensorflow.keras import backend as K
 except Exception as e: print(e)
 
 def natural_sort(l): 
@@ -379,7 +379,7 @@ def cleanPolyData(poly, tol):
 def load_vtk(fn, clean=True,num_mesh=1):
     import vtk
     from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
-    poly = load_vtk_mesh(fn)    
+    poly = load_vtk_mesh(fn)
     if clean:
         poly = cleanPolyData(poly, 0.)
     
@@ -474,7 +474,7 @@ def data_to_tfrecords(X, Y, S,transform, spacing, file_path_prefix=None, verbose
            
     # Generate tfrecord writer
     result_tf_file = file_path_prefix + '.tfrecords'
-    writer = tf.python_io.TFRecordWriter(result_tf_file)
+    writer = tf.io.TFRecordWriter(result_tf_file)
     if verbose:
         print("Serializing example into {}".format(result_tf_file))
         
@@ -534,6 +534,51 @@ def vtk_marching_cube_multi(vtkLabel, bg_id, smooth=None):
     ids = np.delete(ids, np.where(ids==bg_id))
 
     contour = vtk.vtkDiscreteMarchingCubes()
+    contour.SetInputData(vtkLabel)
+    for index, i in enumerate(ids):
+        print("Setting iso-contour value: ", i)
+        contour.SetValue(index, i)
+    contour.Update()
+    mesh = contour.GetOutput()
+
+    return mesh
+
+def vtk_flying_edge(vtkLabel, bg_id, seg_id, smooth=None):
+    import vtk
+
+    ren1 = vtk.vtkRenderer()
+    renWin = vtk.vtkRenderWindow()
+    renWin.SetMultiSamples(0)
+    renWin.AddRenderer(ren1)
+    iren = vtk.vtkRenderWindowInteractor()
+    iren.SetRenderWindow(renWin)
+
+    
+    
+    contour = vtk.vtkFlyingEdges3D()
+    contour.SetInputData(vtkLabel)
+    contour.SetValue(0, seg_id)
+    contour.ComputeNormalsOff()
+    contour.ComputeGradientsOff()
+    contour.ComputeScalarsOn()
+    contour.InterpolateAttributesOff()
+    contour.Update()
+    #mesh = contour.GetOutput()
+
+    #loops = vtk.vtkContourLoopExtraction()
+    #loops.SetInputConnection(contour.GetOutputPort())
+    #loops.Update()
+    #bds = loops.GetOutput().GetBounds()
+
+    return contour.GetOutput()
+
+def vtk_flying_edge_multi(vtkLabel, bg_id, smooth=None):
+    import vtk
+    from vtk.util.numpy_support import vtk_to_numpy
+    ids = np.unique(vtk_to_numpy(vtkLabel.GetPointData().GetScalars()))
+    ids = np.delete(ids, np.where(ids==bg_id))
+
+    contour = vtk.vtkFlyingEdges3D()
     contour.SetInputData(vtkLabel)
     for index, i in enumerate(ids):
         print("Setting iso-contour value: ", i)

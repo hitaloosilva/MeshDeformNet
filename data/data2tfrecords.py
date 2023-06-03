@@ -1,4 +1,3 @@
-
 #Copyright (C) 2021 Fanwei Kong, Shawn C. Shadden, University of California, Berkeley
 
 #Licensed under the Apache License, Version 2.0 (the "License");
@@ -71,7 +70,9 @@ def process_image(image, mask, size, m, intensity, seg_id, deci_rate, smooth_ite
     mesh_all_list, mesh_all_py_list = [], []
     segVol_swap_vtk = exportSitk2VTK(segVol_swap, spacing=[1.5,1.5,1.5])[0]
     for s, s_id in enumerate(seg_id):
-        mesh = smooth_polydata(vtk_marching_cube(segVol_swap_vtk, 0, s_id), iteration=smooth_iter) 
+        # modificação pra Flying Edges
+        #mesh = smooth_polydata(vtk_marching_cube(segVol_swap_vtk, 0, s_id), iteration=smooth_iter)  modificação
+        mesh = smooth_polydata(vtk_flying_edge(segVol_swap_vtk, 0, s_id), iteration=smooth_iter) 
         mesh = bound_polydata_by_image(segVol_swap_vtk, mesh, 1.5)
         mesh = decimation(mesh, deci_rate)
         mesh_py, mesh_poly = transform_polydata(mesh, img_center2-img_center, transform, size)
@@ -146,4 +147,3 @@ if __name__=='__main__':
             os.mkdir(os.path.join(args.out_folder, m+args.folder_postfix))
         except Exception as e: print(e)
     data_preprocess(args.modality,args.folder, args.out_folder,args.folder_postfix, args.intensity, args.size, args.seg_id, args.deci_rate, args.smooth_iter, args.aug_num)
-

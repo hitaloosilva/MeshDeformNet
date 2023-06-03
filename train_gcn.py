@@ -22,11 +22,12 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 
 import tensorflow as tf
-from tensorflow.python.keras.optimizers import Adam, SGD
-from tensorflow.python.keras import backend as K
-from tensorflow.python.keras import losses
-from tensorflow.python.keras import models
-from tensorflow.python.keras.utils import multi_gpu_model
+print(tf.__version__)
+
+from tensorflow.keras.optimizers import Adam, SGD
+from tensorflow.keras import backend as K
+from tensorflow.keras import losses
+from tensorflow.keras import models
 
 from utils import buildImageDataset, construct_feed_dict
 from custom_layers import *
@@ -37,6 +38,7 @@ from model import DeformNet
 from loss import mesh_loss_geometric_cf, point_loss_cf, binary_bce_dice_loss
 from call_backs import *
 """# Set up"""
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--im_trains',  nargs='+',help='Name of the folder containing the image data')
@@ -72,12 +74,11 @@ save_model_path = os.path.join(args.output, "weights_gcn.hdf5")
 
 """ Create new directories """
 try:
-    os.makedirs(os.path.dirname(save_model_path))
-    os.makedirs(os.path.dirname(save_loss_path))
+    os.makedirs(os.path.dirname(save_model_path), exist_ok=True)
+    os.makedirs(os.path.dirname(save_loss_path), exist_ok=True)
 except Exception as e: print(e)
 
 """# Feed in mesh info"""
-
 pkl = pickle.load(open(args.mesh, 'rb'))
 mesh_info = construct_feed_dict(pkl)
 mesh_info['mesh_center'] = [np.zeros(3) for i in range(len(args.mesh_ids))]
@@ -86,19 +87,22 @@ mesh_info['mesh_area'] = [0 for i in range(len(args.mesh_ids))]
 mesh_info['edge_length_scaled'] = [np.zeros(3) for i in range(len(args.mesh_ids))] # 3 is number of blocks
 for txt_fn in args.mesh_txt:
     for i in range(len(args.mesh_ids)):
-        ctr_scale = np.loadtxt(txt_fn) 
-        if len(ctr_scale.shape)==1:
-            ctr_scale = np.expand_dims(ctr_scale, axis=0) 
-        mesh_info['mesh_center'][i] += ctr_scale[i, :-2]/len(args.modality)  
-        mesh_info['mesh_scale'][i] += ctr_scale[i, -2]/len(args.modality)  
-        mesh_info['mesh_area'][i] += ctr_scale[i, -1]/len(args.modality)
+        mesh_info_file_reader = np.loadtxt(txt_fn) 
+        if len(mesh_info_file_reader.shape) == 1:
+            mesh_info_file_reader = np.expand_dims(mesh_info_file_reader, axis=0) 
+        print("mesh_file_info", mesh_info_file_reader[i, :-2])
+        mesh_info['mesh_center'][i] += mesh_info_file_reader[i, :-2]/len(args.modality)  
+        mesh_info['mesh_scale'][i] += mesh_info_file_reader[i, -2]/len(args.modality)  
+        mesh_info['mesh_area'][i] += mesh_info_file_reader[i, -1]/len(args.modality)
 
 for i in range(len(args.mesh_ids)):
-        r = mesh_info['mesh_scale'][i]*2
-        scale = r * np.mean(args.size)
-        area_ratio = mesh_info['mesh_area'][i]/(4*np.pi*r*r)
-        mesh_info['edge_length_scaled'][i] = np.array(mesh_info['edge_length']) * scale * scale * area_ratio
-print("Mesh center, scale: ", mesh_info['mesh_center'], mesh_info['mesh_scale'])
+    r = mesh_info['mesh_scale'][i] * 2
+    scale = r * np.mean(args.size)
+    area_ratio = mesh_info['mesh_area'][i] / ( 4 * np.pi * r * r)
+    mesh_info['edge_length_scaled'][i] = np.array(mesh_info['edge_length']) * scale * scale * area_ratio
+
+print("Mesh center", mesh_info['mesh_center'])
+print("Mesh scale: ", mesh_info['mesh_scale'])
 print("Mesh edge: ", mesh_info['edge_length_scaled'])
 
 """## Set up train and validation datasets
@@ -106,29 +110,32 @@ Note that we apply image augmentation to our training dataset but not our valida
 """
 tr_cfg = {'change_intensity': {"scale": [0.9, 1.1],"shift": [-0.1, 0.1]}}
 tr_preprocessing_fn = functools.partial(_augment_deformnet, **tr_cfg)
-if_seg = True if args.num_seg>0 else False
-
 val_preprocessing_fn = functools.partial(_augment_deformnet)
+
+if_seg = True if args.num_seg > 0 else False
+
 train_ds_list, val_ds_list = [], []
 train_ds_num, val_ds_num = [], []
+
 for data_folder_out, attr in zip(args.im_trains, args.attr_trains):
     x_train_filenames_i = buildImageDataset(data_folder_out, args.modality, 41, mode='_train'+attr, ext=args.file_pattern)
     train_ds_num.append(len(x_train_filenames_i))
-    train_ds_i = get_baseline_dataset_deformnet(x_train_filenames_i, preproc_fn=tr_preprocessing_fn, mesh_ids=args.mesh_ids, \
-            shuffle_buffer=args.shuffle_buffer_size, if_seg=if_seg)
+    train_ds_i = get_baseline_dataset_deformnet(x_train_filenames_i, preproc_fn=tr_preprocessing_fn, mesh_ids=args.mesh_ids, shuffle_buffer=args.shuffle_buffer_size, if_seg=if_seg)
     train_ds_list.append(train_ds_i)
+
 for data_val_folder_out, attr in zip(args.im_vals, args.attr_vals):
+    print(data_val_folder_out)
     x_val_filenames_i = buildImageDataset(data_val_folder_out, args.modality, 41, mode='_val'+attr, ext=args.file_pattern)
     val_ds_num.append(len(x_val_filenames_i))
-    val_ds_i = get_baseline_dataset_deformnet(x_val_filenames_i, preproc_fn=val_preprocessing_fn, mesh_ids=args.mesh_ids, \
-            shuffle_buffer=args.shuffle_buffer_size, if_seg=if_seg)
+    val_ds_i = get_baseline_dataset_deformnet(x_val_filenames_i, preproc_fn=val_preprocessing_fn, mesh_ids=args.mesh_ids, shuffle_buffer=args.shuffle_buffer_size, if_seg=if_seg)
     val_ds_list.append(val_ds_i)
+
 train_data_weights = [w/np.sum(args.train_data_weights) for w in args.train_data_weights]
 val_data_weights = [w/np.sum(args.val_data_weights) for w in args.val_data_weights]
 print("Sampling probability for train and val datasets: ", train_data_weights, val_data_weights)
-train_ds = tf.data.experimental.sample_from_datasets(train_ds_list, weights=train_data_weights)
+train_ds = tf.data.Dataset.sample_from_datasets(train_ds_list, weights=train_data_weights)
 train_ds = train_ds.batch(args.batch_size)
-val_ds = tf.data.experimental.sample_from_datasets(val_ds_list, weights=val_data_weights)
+val_ds = tf.data.Dataset.sample_from_datasets(val_ds_list, weights=val_data_weights)
 val_ds = val_ds.batch(args.batch_size)
 
 num_train_examples = train_ds_num[np.argmax(train_data_weights)]/np.max(train_data_weights)
@@ -138,12 +145,10 @@ print("Number of train, val samples after reweighting: ", num_train_examples, nu
 """# Build the model"""
 model = DeformNet(args.batch_size, img_shape, mesh_info, amplify_factor=args.amplify_factor,num_mesh=len(args.mesh_ids), num_seg=args.num_seg)
 unet_gcn = model.build_keras()
-unet_gcn.summary(line_length=150)
+#unet_gcn.summary(line_length=150)
 
-adam = Adam(lr=args.lr, beta_1=0.9, beta_2=0.999, epsilon=None, decay=1e-6, amsgrad=True)
-output_keys = [node.op.name.split('/')[0] for node in unet_gcn.outputs]
-print("Output Keys: ", output_keys)
-if args.num_seg >0:
+output_keys = [node._name.split('/')[0] for node in unet_gcn.outputs]
+if args.num_seg > 0:
     losses = [ mesh_loss_geometric_cf(mesh_info, 3, args.weights, args.cf_ratio, mesh_info['edge_length_scaled'][(i-1)%len(args.mesh_ids)]) for i in range(1, len(output_keys))]
     losses = [binary_bce_dice_loss] + losses
 else:
@@ -161,22 +166,30 @@ if args.num_seg > 0:
     loss_weights[0] = args.seg_weight
 
 
-unet_gcn.compile(optimizer=adam, loss=losses,loss_weights=loss_weights,  metrics=metrics_losses)
+adam = Adam(learning_rate=args.lr, beta_1=0.9, beta_2=0.999, weight_decay=1e-6, amsgrad=True)
+unet_gcn.compile(optimizer=adam, loss=losses, loss_weights=loss_weights, metrics=metrics_losses)
 """ Setup model checkpoint """
 save_model_path = os.path.join(args.output, "weights_gcn.hdf5")
 
-cp_cd = SaveModelOnCD(metric_key, save_model_path, patience=50)
+#cp_cd = SaveModelOnCD(metric_key, save_model_path, patience=50)
+#checkpoint = tf.train.Checkpoint(optimizer=adam, model=unet_gcn)
 lr_schedule = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.8, patience=10, min_lr=0.000005)
-call_backs = [cp_cd,lr_schedule]
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir="logs/fit", histogram_freq=1)
 
+#call_backs = [cp_cd,lr_schedule,tensorboard_callback]
+call_backs = []
+
+print("load weigths")
 try:
     if args.pre_train != '':
         unet_gcn.load_weights(args.pre_train)
     else:
-        unet_gcn.load_weights(save_model_path)
+        if os.path.exists(save_model_path):
+            print("carregando pesos")
+            unet_gcn.load_weights(save_model_path)
 except Exception as e:
   print("Model not loaded", e)
-
+print("loaded weigths")
 """ Training """
 history =unet_gcn.fit(train_ds, 
                    steps_per_epoch=int(np.ceil(num_train_examples/float(args.batch_size))),
@@ -184,6 +197,7 @@ history =unet_gcn.fit(train_ds,
                    validation_data=val_ds,
                    validation_steps= int(np.ceil(num_val_examples / float(args.batch_size))),
                    callbacks=call_backs)
+
 with open(save_loss_path+"_history", 'wb') as handle: # saving the history 
         pickle.dump(history.history, handle)
 

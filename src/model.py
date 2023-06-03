@@ -12,15 +12,15 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 import tensorflow as tf
-import tensorflow.contrib as tfcontrib
-from tensorflow.python.keras import layers
-from tensorflow.python.keras import losses
-from tensorflow.python.keras import models
-from tensorflow.python.keras import backend as K
-from tensorflow.python.keras import regularizers
+from tensorflow.keras import layers
+from tensorflow.keras import losses
+from tensorflow.keras import models
+from tensorflow.keras import backend as K
+from tensorflow.keras import regularizers
 from custom_layers import *
 import numpy as np
 #from loss import *
+
 
 class DeformNet(object):
     def __init__(self, batch_size, input_size, feed_dict, amplify_factor=1., num_mesh=1, num_seg=8):
@@ -38,15 +38,15 @@ class DeformNet(object):
     def build_keras(self):
         image_inputs = layers.Input(self.input_size, batch_size=self.batch_size)
         features =  self._unet_isensee_encoder(image_inputs) 
-        if self.num_seg >0:
+        if self.num_seg > 0:
             decoder =  self._unet_isensee_decoder(features)
         
         mesh_coords = self.feed_dict['mesh_coords']
         adjs = [j for j in self.feed_dict['adjs']] 
         mesh_coords_p = Position(mesh_coords, self.feed_dict['mesh_scale'],self.feed_dict['mesh_center'])(image_inputs)
         outputs = self._graph_decoder_keras((features, mesh_coords_p, self.feed_dict['mesh_scale']),self.hidden_dim, adjs)
-        if self.num_seg >0:
-            outputs = [decoder]+ list(outputs)
+        if self.num_seg > 0:
+            outputs = [decoder] + list(outputs)
         return models.Model([image_inputs],outputs)
     
     def _unet_isensee_encoder(self, inputs):
@@ -72,6 +72,7 @@ class DeformNet(object):
         output_sum = layers.Add()([output2_up, output1])
         output_sum = layers.UpSampling3D(size=(2,2,2))(output_sum)
         output = layers.Add()([output_sum, output0])
+        #output._name = "decoder_out"
         return output
 
     def _graph_res_block(self, inputs, adjs, in_dim, hidden_dim):
@@ -117,14 +118,14 @@ class DeformNet(object):
            output1_list = []
            output2_list = []
            output3_list = []
-           for i in range(self.num_mesh):
-               mesh1_i = layers.Lambda(lambda x: x[:, i*num_coords:(i+1)*num_coords, :])(mesh1)
-               mesh2_i = layers.Lambda(lambda x: x[:, i*num_coords:(i+1)*num_coords, :])(mesh2)
-               mesh3_i = layers.Lambda(lambda x: x[:, i*num_coords:(i+1)*num_coords, :])(mesh3)
+           for i in range(self.num_mesh):               
+               mesh1_i = MeshLayer(i, num_coords)(mesh1)               
+               mesh2_i = MeshLayer(i, num_coords)(mesh2) 
+               mesh3_i = MeshLayer(i, num_coords)(mesh3) 
                output1_list.append(mesh1_i)
                output2_list.append(mesh2_i)
                output3_list.append(mesh3_i)
-           return output1_list +output2_list + output3_list
+           return output1_list + output2_list + output3_list
        else:
            return [mesh1, mesh2, mesh3]
 

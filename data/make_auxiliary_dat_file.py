@@ -20,7 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__),'../src'))
 import pickle
 import trimesh
 import argparse
-from scipy.sparse.linalg.eigen.arpack import eigsh
+from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix
 import vtk
 from utils import load_vtk_mesh, write_vtk_polydata, cleanPolyData, load_vtk

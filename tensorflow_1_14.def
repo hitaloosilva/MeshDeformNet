@@ -1,0 +1,9 @@
+Bootstrap: docker
+from: tensorflow/tensorflow:1.14.0-gpu-py3-jupyter
+
+%environment
+    export TZ="America/Recife"
+
+%post    
+    export TZ="America/Recife"
+    export DEBIAN_FRONTEND="noninteractive"

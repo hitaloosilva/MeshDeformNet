@@ -111,7 +111,7 @@ def centering(img, ref_img, order=1):
   img_center = np.array(img.TransformContinuousIndexToPhysicalPoint(np.array(img.GetSize())/2.0))
   reference_center = np.array(ref_img.TransformContinuousIndexToPhysicalPoint(np.array(ref_img.GetSize())/2.0))
   centering_transform.SetOffset(np.array(transform.GetInverse().TransformPoint(img_center) - reference_center))
-  centered_transform = sitk.Transform(transform)
+  centered_transform = sitk.CompositeTransform(transform)
   centered_transform.AddTransform(centering_transform)
 
   return transform_func(img, ref_img, centered_transform, order)

@@ -1,0 +1,39 @@
+Bootstrap: docker
+#from:  tensorflow/tensorflow:custom-op-gpu-ubuntu16
+from:  tensorflow/tensorflow:custom-op-gpu-ubuntu16-cuda10.0
+
+
+%environment
+    export TZ="America/Recife"
+
+
+%post    
+    export TZ="America/Recife"
+
+    apt-get update && apt-get install -y
+
+    apt-get install -y make build-essential libssl-dev zlib1g-dev \
+    libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev \
+    libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python-openssl    
+    apt-get install libjpeg-dev zlib1g-dev -y
+    apt-get install libx11-6 -y
+    apt-get install libopenmpi-dev -y
+    apt-get install libhdf5-serial-dev -y
+
+    pip3 install nibabel
+    pip3 install typing-extensions
+    pip3 install typeguard
+    pip3 install mpi4py==3.1.3
+    pip3 install networkx==2.4
+    pip3 install numpy==1.18.1
+    pip3 install scikit_image==0.16.2
+    pip3 install scikit_learn==0.22.*
+    pip3 install scipy==1.4.1
+    pip3 install SimpleITK==1.2.*
+    pip3 install tensorflow-gpu==1.14.0
+    pip3 install trimesh==3.6.16
+    pip3 install vtk==9.*
+
+    cd /usr/local/lib/python3.6/dist-packages/tensorflow/
+    ln -s libtensorflow_framework.so.1 libtensorflow_framework.so       
+    
